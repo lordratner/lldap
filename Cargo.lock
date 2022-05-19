@@ -557,7 +557,7 @@ dependencies = [
  "rand 0.7.3",
  "serde",
  "serde_json",
- "uuid 0.8.2",
+ "uuid",
 ]
 
 [[package]]
@@ -1807,7 +1807,7 @@ dependencies = [
  "smartstring",
  "static_assertions",
  "url",
- "uuid 0.8.2",
+ "uuid",
 ]
 
 [[package]]
@@ -1988,7 +1988,7 @@ checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "lldap"
-version = "0.3.0"
+version = "0.3.0-rc.1"
 dependencies = [
  "actix",
  "actix-files",
@@ -2026,6 +2026,7 @@ dependencies = [
  "openssl-sys",
  "orion",
  "rand 0.8.5",
+ "reqwest",
  "sea-query",
  "sea-query-binder",
  "secstr",
@@ -2046,7 +2047,7 @@ dependencies = [
  "tracing-forest",
  "tracing-log",
  "tracing-subscriber",
- "uuid 1.1.2",
+ "uuid",
 ]
 
 [[package]]
@@ -2063,6 +2064,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "sha1 0.10.1",
  "validator",
  "validator_derive 0.15.0",
  "wasm-bindgen",
@@ -2161,13 +2163,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "md-5"
-version = "0.10.1"
+name = "md5"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "658646b21e0b72f7866c7038ab086d3d5e1cd6271f060fd37defb241949d0582"
-dependencies = [
- "digest 0.10.3",
-]
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
 
 [[package]]
 name = "memchr"
@@ -3215,6 +3214,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha1"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c77f4e7f65455545c2153c1253d25056825e77ee2533f0e41deb65a93a34852f"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest 0.10.3",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3387,7 +3397,7 @@ dependencies = [
  "libc",
  "libsqlite3-sys",
  "log",
- "md-5 0.9.1",
+ "md-5",
  "memchr",
  "num-bigint",
  "once_cell",
@@ -3495,7 +3505,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "sha1",
+ "sha1 0.6.1",
  "syn",
 ]
 
@@ -3800,7 +3810,7 @@ dependencies = [
  "futures",
  "tracing",
  "tracing-futures",
- "uuid 0.8.2",
+ "uuid",
 ]
 
 [[package]]
@@ -3989,15 +3999,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
 dependencies = [
  "getrandom 0.2.7",
-]
-
-[[package]]
-name = "uuid"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd6469f4314d5f1ffec476e05f17cc9a78bc7a27a6a857842170bdf8d6f98d2f"
-dependencies = [
- "md-5 0.10.1",
+ "md5",
 ]
 
 [[package]]

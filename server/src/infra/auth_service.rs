@@ -1,16 +1,16 @@
 use std::collections::{hash_map::DefaultHasher, HashSet};
 use std::hash::{Hash, Hasher};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::Poll;
 
 use actix_web::{
     cookie::{Cookie, SameSite},
     dev::{Service, ServiceRequest, ServiceResponse, Transform},
     error::{ErrorBadRequest, ErrorUnauthorized},
-    web, HttpRequest, HttpResponse,
+    web, FromRequest, HttpRequest, HttpResponse,
 };
 use actix_web_httpauth::extractors::bearer::BearerAuth;
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use chrono::prelude::*;
 use futures::future::{ok, Ready};
 use futures_util::FutureExt;
@@ -183,6 +183,24 @@ where
         .unwrap_or_else(error_to_http_response)
 }
 
+async fn check_password_reset_token<'a, Backend>(
+    backend_handler: &Backend,
+    token: &Option<&'a str>,
+) -> TcpResult<Option<(&'a str, UserId)>>
+where
+    Backend: TcpBackendHandler + BackendHandler + 'static,
+{
+    let token = match token {
+        None => return Ok(None),
+        Some(token) => token,
+    };
+    let user_id = backend_handler
+        .get_user_id_for_password_reset_token(token)
+        .await
+        .map_err(|_| TcpError::UnauthorizedError("Invalid or expired token".to_string()))?;
+    Ok(Some((token, user_id)))
+}
+
 #[instrument(skip_all, level = "debug")]
 async fn get_password_reset_step2<Backend>(
     data: web::Data<AppState<Backend>>,
@@ -191,14 +209,10 @@ async fn get_password_reset_step2<Backend>(
 where
     Backend: TcpBackendHandler + BackendHandler + 'static,
 {
-    let token = request
-        .match_info()
-        .get("token")
-        .ok_or_else(|| TcpError::BadRequest("Missing reset token".to_string()))?;
-    let user_id = data
-        .backend_handler
-        .get_user_id_for_password_reset_token(token)
-        .await?;
+    let (token, user_id) =
+        check_password_reset_token(&data.backend_handler, &request.match_info().get("token"))
+            .await?
+            .ok_or_else(|| TcpError::BadRequest("Missing token".to_string()))?;
     let _ = data
         .backend_handler
         .delete_password_reset_token(token)
@@ -377,6 +391,7 @@ where
     Backend: TcpBackendHandler + BackendHandler + OpaqueHandler + LoginHandler + 'static,
 {
     let user_id = UserId::new(&request.username);
+    debug!(?user_id);
     let bind_request = BindRequest {
         name: user_id.clone(),
         password: request.password.clone(),
@@ -397,42 +412,118 @@ where
         .unwrap_or_else(error_to_http_response)
 }
 
-#[instrument(skip_all, level = "debug")]
-async fn post_authorize<Backend>(
-    data: web::Data<AppState<Backend>>,
-    request: web::Json<BindRequest>,
-) -> TcpResult<HttpResponse>
-where
-    Backend: TcpBackendHandler + BackendHandler + LoginHandler + 'static,
-{
-    let name = request.name.clone();
-    debug!(%name);
-    data.backend_handler.bind(request.into_inner()).await?;
-    get_login_successful_response(&data, &name).await
+fn parse_hash_list(response: &str) -> Result<password_reset::PasswordHashList> {
+    use password_reset::*;
+    let parse_line = |line: &str| -> Result<PasswordHashCount> {
+        let split = line.trim().split(':').collect::<Vec<_>>();
+        if let [hash, count] = &split[..] {
+            if hash.len() == 35 {
+                if let Ok(count) = str::parse::<u64>(count) {
+                    return Ok(PasswordHashCount {
+                        hash: hash.to_string(),
+                        count,
+                    });
+                }
+            }
+        }
+        bail!("Invalid password hash from API: {}", line)
+    };
+    Ok(PasswordHashList {
+        hashes: response
+            .split('\n')
+            .map(parse_line)
+            .collect::<Result<Vec<_>>>()?,
+    })
 }
 
-async fn post_authorize_handler<Backend>(
+async fn get_password_hash_list(
+    hash: &str,
+    api_key: &str,
+) -> Result<password_reset::PasswordHashList> {
+    use reqwest::*;
+    let client = Client::new();
+    let resp = client
+        .get(format!("https://api.pwnedpasswords.com/range/{}", hash))
+        .header(header::USER_AGENT, "LLDAP")
+        .header("hibp-api-key", api_key)
+        .send()
+        .await
+        .context("Could not get response from HIPB")?
+        .text()
+        .await?;
+    parse_hash_list(&resp).context("Invalid HIPB response")
+}
+
+async fn check_password_pwned<Backend>(
     data: web::Data<AppState<Backend>>,
-    request: web::Json<BindRequest>,
+    request: HttpRequest,
+    mut payload: web::Payload,
+) -> TcpResult<HttpResponse>
+where
+    Backend: TcpBackendHandler + BackendHandler + OpaqueHandler + 'static,
+{
+    let has_reset_token = check_password_reset_token(
+        &data.backend_handler,
+        &request
+            .headers()
+            .get("reset-token")
+            .map(|v| v.to_str().unwrap()),
+    )
+    .await?
+    .is_some();
+    if !has_reset_token
+        && BearerAuth::from_request(&request, &mut payload.0)
+            .await
+            .ok()
+            .and_then(|bearer| check_if_token_is_valid(&data, bearer.token()).ok())
+            .is_none()
+    {
+        return Err(TcpError::UnauthorizedError(
+            "No token or invalid token".to_string(),
+        ));
+    }
+    if data.hipb_api_key.is_empty() {
+        return Err(TcpError::NotImplemented("No HIPB API key".to_string()));
+    }
+    let parsed_request =
+        web::Json::<password_reset::PasswordPartialHash>::from_request(&request, &mut payload.0)
+            .await
+            .map_err(|_| TcpError::BadRequest("Bad request: invalid json".to_string()))?;
+    let hash = &parsed_request.partial_hash;
+    if hash.len() != 5 || !hash.chars().all(|c| c.is_digit(16)) {
+        return Err(TcpError::BadRequest(format!(
+            "Bad request: invalid hash format \"{}\"",
+            hash
+        )));
+    }
+    get_password_hash_list(hash, &data.hipb_api_key)
+        .await
+        .map(|hashes| HttpResponse::Ok().json(hashes))
+        .map_err(|e| TcpError::InternalServerError(e.to_string()))
+}
+
+async fn check_password_pwned_handler<Backend>(
+    data: web::Data<AppState<Backend>>,
+    request: HttpRequest,
+    payload: web::Payload,
 ) -> HttpResponse
 where
-    Backend: TcpBackendHandler + BackendHandler + LoginHandler + 'static,
+    Backend: TcpBackendHandler + BackendHandler + OpaqueHandler + 'static,
 {
-    post_authorize(data, request)
+    check_password_pwned(data, request, payload)
         .await
         .unwrap_or_else(error_to_http_response)
 }
 
 #[instrument(skip_all, level = "debug")]
 async fn opaque_register_start<Backend>(
-    request: actix_web::HttpRequest,
-    mut payload: actix_web::web::Payload,
+    request: HttpRequest,
+    mut payload: web::Payload,
     data: web::Data<AppState<Backend>>,
 ) -> TcpResult<registration::ServerRegistrationStartResponse>
 where
     Backend: OpaqueHandler + 'static,
 {
-    use actix_web::FromRequest;
     let validation_result = BearerAuth::from_request(&request, &mut payload.0)
         .await
         .ok()
@@ -532,7 +623,7 @@ where
     #[allow(clippy::type_complexity)]
     type Future = Pin<Box<dyn core::future::Future<Output = Result<Self::Response, Self::Error>>>>;
 
-    fn poll_ready(&self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&self, cx: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.service.poll_ready(cx)
     }
 
@@ -626,11 +717,14 @@ pub(crate) fn check_if_token_is_valid<Backend>(
         return Err(ErrorUnauthorized("JWT was logged out"));
     }
     let is_in_group = |name| token.claims().groups.contains(name);
+    let is_lldap_admin = is_in_group("lldap_admin");
+    let is_readonly_user = is_in_group("lldap_readonly");
+    let (_, claims): (jwt::Header, JWTClaims) = token.into();
     Ok(ValidationResults {
-        user: token.claims().user.clone(),
-        permission: if is_in_group("lldap_admin") {
+        user: claims.user,
+        permission: if is_lldap_admin {
             Permission::Admin
-        } else if is_in_group("lldap_readonly") {
+        } else if is_readonly_user {
             Permission::Readonly
         } else {
             Permission::Regular
@@ -642,38 +736,39 @@ pub fn configure_server<Backend>(cfg: &mut web::ServiceConfig)
 where
     Backend: TcpBackendHandler + LoginHandler + OpaqueHandler + BackendHandler + 'static,
 {
-    cfg.service(web::resource("").route(web::post().to(post_authorize_handler::<Backend>)))
-        .service(
-            web::resource("/opaque/login/start")
-                .route(web::post().to(opaque_login_start::<Backend>)),
-        )
-        .service(
-            web::resource("/opaque/login/finish")
-                .route(web::post().to(opaque_login_finish_handler::<Backend>)),
-        )
-        .service(
-            web::resource("/simple/login").route(web::post().to(simple_login_handler::<Backend>)),
-        )
-        .service(web::resource("/refresh").route(web::get().to(get_refresh_handler::<Backend>)))
-        .service(
-            web::resource("/reset/step1/{user_id}")
-                .route(web::get().to(get_password_reset_step1_handler::<Backend>)),
-        )
-        .service(
-            web::resource("/reset/step2/{token}")
-                .route(web::get().to(get_password_reset_step2_handler::<Backend>)),
-        )
-        .service(web::resource("/logout").route(web::get().to(get_logout_handler::<Backend>)))
-        .service(
-            web::scope("/opaque/register")
-                .wrap(CookieToHeaderTranslatorFactory)
-                .service(
-                    web::resource("/start")
-                        .route(web::post().to(opaque_register_start_handler::<Backend>)),
-                )
-                .service(
-                    web::resource("/finish")
-                        .route(web::post().to(opaque_register_finish_handler::<Backend>)),
-                ),
-        );
+    cfg.service(
+        web::resource("/opaque/login/start").route(web::post().to(opaque_login_start::<Backend>)),
+    )
+    .service(
+        web::resource("/opaque/login/finish")
+            .route(web::post().to(opaque_login_finish_handler::<Backend>)),
+    )
+    .service(web::resource("/simple/login").route(web::post().to(simple_login_handler::<Backend>)))
+    .service(web::resource("/refresh").route(web::get().to(get_refresh_handler::<Backend>)))
+    .service(
+        web::resource("/password/check")
+            .wrap(CookieToHeaderTranslatorFactory)
+            .route(web::post().to(check_password_pwned_handler::<Backend>)),
+    )
+    .service(
+        web::resource("/reset/step1/{user_id}")
+            .route(web::get().to(get_password_reset_step1_handler::<Backend>)),
+    )
+    .service(
+        web::resource("/reset/step2/{token}")
+            .route(web::get().to(get_password_reset_step2_handler::<Backend>)),
+    )
+    .service(web::resource("/logout").route(web::get().to(get_logout_handler::<Backend>)))
+    .service(
+        web::scope("/opaque/register")
+            .wrap(CookieToHeaderTranslatorFactory)
+            .service(
+                web::resource("/start")
+                    .route(web::post().to(opaque_register_start_handler::<Backend>)),
+            )
+            .service(
+                web::resource("/finish")
+                    .route(web::post().to(opaque_register_finish_handler::<Backend>)),
+            ),
+    );
 }
