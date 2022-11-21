@@ -94,7 +94,8 @@ version = "0.1"
 features = ["with-chrono", "sqlx-sqlite", "sqlx-any"]
 
 [dependencies.opaque-ke]
-version = "0.6"
+version = "2"
+features = ["std"]
 
 [dependencies.rand]
 features = ["small_rng", "getrandom"]

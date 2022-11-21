@@ -73,9 +73,12 @@ pub struct Props {
 pub enum Msg {
     FormUpdate,
     Submit,
-    AuthenticationStartResponse(Result<Box<login::ServerLoginStartResponse>>),
+    AuthenticationStartResponse(String, Result<Box<login::ServerLoginStartResponse>>),
     SubmitNewPassword,
-    RegistrationStartResponse(Result<Box<registration::ServerRegistrationStartResponse>>),
+    RegistrationStartResponse(
+        String,
+        Result<Box<registration::ServerRegistrationStartResponse>>,
+    ),
     RegistrationFinishResponse(Result<()>),
 }
 
@@ -103,29 +106,28 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                         username: self.common.username.clone(),
                         login_start_request: login_start_request.message,
                     };
-                    self.common.call_backend(
-                        HostService::login_start,
-                        req,
-                        Msg::AuthenticationStartResponse,
-                    )?;
+                    self.common
+                        .call_backend(HostService::login_start, req, |r| {
+                            Msg::AuthenticationStartResponse(old_password, r)
+                        })?;
                     Ok(true)
                 }
             }
-            Msg::AuthenticationStartResponse(res) => {
+            Msg::AuthenticationStartResponse(old_password, res) => {
                 let res = res.context("Could not initiate login")?;
                 match self.opaque_data.take() {
                     OpaqueData::Login(l) => {
-                        opaque::client::login::finish_login(l, res.credential_response).map_err(
-                            |e| {
-                                // Common error, we want to print a full error to the console but only a
-                                // simple one to the user.
-                                ConsoleService::error(&format!(
-                                    "Invalid username or password: {}",
-                                    e
-                                ));
-                                anyhow!("Invalid username or password")
-                            },
-                        )?;
+                        opaque::client::login::finish_login(
+                            &old_password,
+                            l,
+                            res.credential_response,
+                        )
+                        .map_err(|e| {
+                            // Common error, we want to print a full error to the console but only a
+                            // simple one to the user.
+                            ConsoleService::error(&format!("Invalid username or password: {}", e));
+                            anyhow!("Invalid username or password")
+                        })?;
                     }
                     _ => panic!("Unexpected data in opaque_data field"),
                 };
@@ -142,20 +144,20 @@ impl CommonComponent<ChangePasswordForm> for ChangePasswordForm {
                     registration_start_request: registration_start_request.message,
                 };
                 self.opaque_data = OpaqueData::Registration(registration_start_request.state);
-                self.common.call_backend(
-                    HostService::register_start,
-                    req,
-                    Msg::RegistrationStartResponse,
-                )?;
+                self.common
+                    .call_backend(HostService::register_start, req, |r| {
+                        Msg::RegistrationStartResponse(new_password, r)
+                    })?;
                 Ok(true)
             }
-            Msg::RegistrationStartResponse(res) => {
+            Msg::RegistrationStartResponse(new_password, res) => {
                 let res = res.context("Could not initiate password change")?;
                 match self.opaque_data.take() {
                     OpaqueData::Registration(registration) => {
                         let mut rng = rand::rngs::OsRng;
                         let registration_finish =
                             opaque::client::registration::finish_registration(
+                                &new_password,
                                 registration,
                                 res.registration_response,
                                 &mut rng,

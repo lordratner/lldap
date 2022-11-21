@@ -45,7 +45,10 @@ pub enum Msg {
     ValidateTokenResponse(Result<ServerPasswordResetResponse>),
     FormUpdate,
     Submit,
-    RegistrationStartResponse(Result<Box<registration::ServerRegistrationStartResponse>>),
+    RegistrationStartResponse(
+        String,
+        Result<Box<registration::ServerRegistrationStartResponse>>,
+    ),
     RegistrationFinishResponse(Result<()>),
 }
 
@@ -72,18 +75,18 @@ impl CommonComponent<ResetPasswordStep2Form> for ResetPasswordStep2Form {
                     registration_start_request: registration_start_request.message,
                 };
                 self.opaque_data = Some(registration_start_request.state);
-                self.common.call_backend(
-                    HostService::register_start,
-                    req,
-                    Msg::RegistrationStartResponse,
-                )?;
+                self.common
+                    .call_backend(HostService::register_start, req, |r| {
+                        Msg::RegistrationStartResponse(new_password, r)
+                    })?;
                 Ok(true)
             }
-            Msg::RegistrationStartResponse(res) => {
+            Msg::RegistrationStartResponse(new_password, res) => {
                 let res = res.context("Could not initiate password change")?;
                 let registration = self.opaque_data.take().expect("Missing registration data");
                 let mut rng = rand::rngs::OsRng;
                 let registration_finish = opaque_registration::finish_registration(
+                    &new_password,
                     registration,
                     res.registration_response,
                     &mut rng,

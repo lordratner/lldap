@@ -17,7 +17,6 @@ use crate::{
     },
     infra::auth_service::{Permission, ValidationResults},
 };
-use anyhow::Result;
 use ldap3_proto::proto::{
     LdapAddRequest, LdapBindCred, LdapBindRequest, LdapBindResponse, LdapExtendedRequest,
     LdapExtendedResponse, LdapFilter, LdapOp, LdapPartialAttribute, LdapPasswordModifyRequest,
@@ -238,29 +237,6 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
         }
     }
 
-    async fn change_password(&mut self, user: &UserId, password: &str) -> Result<()> {
-        use lldap_auth::*;
-        let mut rng = rand::rngs::OsRng;
-        let registration_start_request =
-            opaque::client::registration::start_registration(password, &mut rng)?;
-        let req = registration::ClientRegistrationStartRequest {
-            username: user.to_string(),
-            registration_start_request: registration_start_request.message,
-        };
-        let registration_start_response = self.backend_handler.registration_start(req).await?;
-        let registration_finish = opaque::client::registration::finish_registration(
-            registration_start_request.state,
-            registration_start_response.registration_response,
-            &mut rng,
-        )?;
-        let req = registration::ClientRegistrationFinishRequest {
-            server_data: registration_start_response.server_data,
-            registration_upload: registration_finish.message,
-        };
-        self.backend_handler.registration_finish(req).await?;
-        Ok(())
-    }
-
     async fn do_password_modification(
         &mut self,
         request: &LdapPasswordModifyRequest,
@@ -298,7 +274,14 @@ impl<Backend: BackendHandler + LoginHandler + OpaqueHandler> LdapHandler<Backend
                                     &credentials.user, &uid
                                 ),
                             })
-                        } else if let Err(e) = self.change_password(&uid, password).await {
+                        } else if let Err(e) = self
+                            .backend_handler
+                            .set_password(BindRequest {
+                                name: uid,
+                                password: password.to_owned(),
+                            })
+                            .await
+                        {
                             Err(LdapError {
                                 code: LdapResultCode::Other,
                                 message: format!("Error while changing the password: {:#?}", e),
@@ -587,6 +570,7 @@ mod tests {
         #[async_trait]
         impl LoginHandler for TestBackendHandler {
             async fn bind(&self, request: BindRequest) -> Result<()>;
+            async fn set_password(&self, request: BindRequest) -> Result<()>;
         }
         #[async_trait]
         impl GroupBackendHandler for TestBackendHandler {
@@ -1815,28 +1799,12 @@ mod tests {
         mock.expect_get_user_groups()
             .with(eq(UserId::new("bob")))
             .returning(|_| Ok(HashSet::new()));
-        use lldap_auth::*;
-        let mut rng = rand::rngs::OsRng;
-        let registration_start_request =
-            opaque::client::registration::start_registration("password", &mut rng).unwrap();
-        let request = registration::ClientRegistrationStartRequest {
-            username: "bob".to_string(),
-            registration_start_request: registration_start_request.message,
-        };
-        let start_response = opaque::server::registration::start_registration(
-            &opaque::server::ServerSetup::new(&mut rng),
-            request.registration_start_request,
-            &request.username,
-        )
-        .unwrap();
-        mock.expect_registration_start().times(1).return_once(|_| {
-            Ok(registration::ServerRegistrationStartResponse {
-                server_data: "".to_string(),
-                registration_response: start_response.message,
-            })
-        });
-        mock.expect_registration_finish()
+        mock.expect_set_password()
             .times(1)
+            .with(eq(BindRequest {
+                name: UserId::new("bob"),
+                password: "password".to_owned(),
+            }))
             .return_once(|_| Ok(()));
         let mut ldap_handler = setup_bound_admin_handler(mock).await;
         let request = LdapOp::ExtendedRequest(
@@ -1862,28 +1830,12 @@ mod tests {
         mock.expect_get_user_groups()
             .with(eq(UserId::new("bob")))
             .returning(|_| Ok(HashSet::new()));
-        use lldap_auth::*;
-        let mut rng = rand::rngs::OsRng;
-        let registration_start_request =
-            opaque::client::registration::start_registration("password", &mut rng).unwrap();
-        let request = registration::ClientRegistrationStartRequest {
-            username: "bob".to_string(),
-            registration_start_request: registration_start_request.message,
-        };
-        let start_response = opaque::server::registration::start_registration(
-            &opaque::server::ServerSetup::new(&mut rng),
-            request.registration_start_request,
-            &request.username,
-        )
-        .unwrap();
-        mock.expect_registration_start().times(1).return_once(|_| {
-            Ok(registration::ServerRegistrationStartResponse {
-                server_data: "".to_string(),
-                registration_response: start_response.message,
-            })
-        });
-        mock.expect_registration_finish()
+        mock.expect_set_password()
             .times(1)
+            .with(eq(BindRequest {
+                name: UserId::new("bob"),
+                password: "password".to_owned(),
+            }))
             .return_once(|_| Ok(()));
         let mut ldap_handler = setup_bound_password_manager_handler(mock).await;
         let request = LdapOp::ExtendedRequest(

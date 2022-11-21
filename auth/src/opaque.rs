@@ -10,40 +10,46 @@ pub enum AuthenticationError {
 pub type AuthenticationResult<T> = std::result::Result<T, AuthenticationError>;
 
 pub use opaque_ke::keypair::{PrivateKey, PublicKey};
-pub type KeyPair = opaque_ke::keypair::KeyPair<<DefaultSuite as CipherSuite>::Group>;
+pub type KeyPair = opaque_ke::keypair::KeyPair<<DefaultSuite as CipherSuite>::KeGroup>;
 
 /// A wrapper around argon2 to provide the [`opaque_ke::slow_hash::SlowHash`] trait.
-pub struct ArgonHasher;
+pub struct ArgonHasher {
+    hasher: argon2::Argon2<'static>,
+}
 
 /// The Argon hasher used for bruteforce protection.
 ///
 /// Note that it isn't used to "hash the passwords", so it doesn't need a variable salt. Instead,
 /// it's used as part of the OPAQUE protocol to add a slow hashing method, making bruteforce
 /// attacks prohibitively more expensive.
-impl ArgonHasher {
-    /// Fixed salt, doesn't affect the security. It is only used to make attacks more
-    /// computationally intensive, it doesn't serve any security purpose.
-    const SALT: &'static [u8] = b"lldap_opaque_salt";
-    /// Config for the argon hasher. Security enthusiasts may want to tweak this for their system.
-    const CONFIG: &'static argon2::Config<'static> = &argon2::Config {
-        ad: &[],
-        hash_length: 128,
-        lanes: 1,
-        mem_cost: 50 * 1024, // 50 MB, in KB
-        secret: &[],
-        thread_mode: argon2::ThreadMode::Sequential,
-        time_cost: 1,
-        variant: argon2::Variant::Argon2id,
-        version: argon2::Version::Version13,
-    };
+impl Default for ArgonHasher {
+    fn default() -> Self {
+        ArgonHasher {
+            hasher: argon2::Argon2::new(
+                argon2::Algorithm::Argon2id,
+                argon2::Version::default(),
+                argon2::Params::new(
+                    50 * 1024, // 50 MB, in KB
+                    1,
+                    1,
+                    Some(64),
+                )
+                .unwrap(),
+            ),
+        }
+    }
 }
 
-impl<D: opaque_ke::hash::Hash> opaque_ke::slow_hash::SlowHash<D> for ArgonHasher {
-    fn hash(
-        input: generic_array::GenericArray<u8, <D as digest::Digest>::OutputSize>,
-    ) -> Result<Vec<u8>, opaque_ke::errors::InternalPakeError> {
-        argon2::hash_raw(&input, Self::SALT, Self::CONFIG)
-            .map_err(|_| opaque_ke::errors::InternalPakeError::HashingFailure)
+impl opaque_ke::ksf::Ksf for ArgonHasher {
+    fn hash<L: generic_array::ArrayLength<u8>>(
+        &self,
+        input: generic_array::GenericArray<u8, L>,
+    ) -> Result<generic_array::GenericArray<u8, L>, opaque_ke::errors::InternalError> {
+        let mut output = generic_array::GenericArray::<u8, L>::default();
+        self.hasher
+            .hash_password_into(&input, &[0; 16], &mut output)
+            .map_err(|_| opaque_ke::errors::InternalError::KsfError)?;
+        Ok(output)
     }
 }
 
@@ -52,11 +58,11 @@ impl<D: opaque_ke::hash::Hash> opaque_ke::slow_hash::SlowHash<D> for ArgonHasher
 #[allow(dead_code)]
 pub struct DefaultSuite;
 impl CipherSuite for DefaultSuite {
-    type Group = curve25519_dalek::ristretto::RistrettoPoint;
-    type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDH;
-    type Hash = sha2::Sha512;
-    /// Use argon2 as the slow hashing algorithm for our CipherSuite.
-    type SlowHash = ArgonHasher;
+    type OprfCs = opaque_ke::Ristretto255;
+    type KeGroup = opaque_ke::Ristretto255;
+    type KeyExchange = opaque_ke::key_exchange::tripledh::TripleDh;
+
+    type Ksf = ArgonHasher;
 }
 
 /// Client-side code for OPAQUE protocol handling, to register a new user and login.  All methods'
@@ -85,12 +91,14 @@ pub mod client {
 
         /// Finalize the registration negotiation.
         pub fn finish_registration<R: RngCore + CryptoRng>(
+            password: &str,
             registration_start: ClientRegistration,
             registration_response: RegistrationResponse,
             rng: &mut R,
         ) -> AuthenticationResult<ClientRegistrationFinishResult> {
             Ok(registration_start.finish(
                 rng,
+                password.as_bytes(),
                 registration_response,
                 ClientRegistrationFinishParameters::default(),
             )?)
@@ -117,10 +125,15 @@ pub mod client {
 
         /// Finalize the client login negotiation.
         pub fn finish_login(
+            password: &str,
             login_start: ClientLogin,
             login_response: CredentialResponse,
         ) -> AuthenticationResult<ClientLoginFinishResult> {
-            Ok(login_start.finish(login_response, ClientLoginFinishParameters::default())?)
+            Ok(login_start.finish(
+                password.as_bytes(),
+                login_response,
+                ClientLoginFinishParameters::default(),
+            )?)
         }
     }
 }

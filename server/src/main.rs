@@ -58,7 +58,7 @@ async fn set_up_server(config: Configuration) -> Result<ServerBuilder> {
         .connect(&config.database_url)
         .await
         .context("while connecting to the DB")?;
-    domain::sql_tables::init_table(&sql_pool)
+    domain::sql_tables::init_table(&sql_pool, &config)
         .await
         .context("while creating the tables")?;
     let backend_handler = SqlBackendHandler::new(config.clone(), sql_pool.clone());

@@ -1,5 +1,8 @@
+use crate::infra::configuration::Configuration;
+
 use super::{
-    handler::{GroupId, UserId, Uuid},
+    handler::{GroupId, LoginHandler, UserId, Uuid},
+    sql_backend_handler::SqlBackendHandler,
     sql_tables::{
         DbQueryBuilder, DbRow, Groups, Memberships, Metadata, Pool, SchemaVersion, Users,
     },
@@ -7,7 +10,7 @@ use super::{
 use sea_query::*;
 use sea_query_binder::SqlxBinder;
 use sqlx::Row;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 pub async fn create_group(group_name: &str, pool: &Pool) -> sqlx::Result<()> {
     let now = chrono::Utc::now();
@@ -45,6 +48,7 @@ pub async fn get_schema_version(pool: &Pool) -> Option<SchemaVersion> {
 }
 
 pub async fn upgrade_to_v1(pool: &Pool) -> sqlx::Result<()> {
+    info!("Upgrading DB schema from version 0->1");
     // SQLite needs this pragma to be turned on. Other DB might not understand this, so ignore the
     // error.
     let _ = sqlx::query("PRAGMA foreign_keys = ON").execute(pool).await;
@@ -296,8 +300,39 @@ pub async fn upgrade_to_v1(pool: &Pool) -> sqlx::Result<()> {
     Ok(())
 }
 
-pub async fn migrate_from_version(_pool: &Pool, version: SchemaVersion) -> anyhow::Result<()> {
-    if version.0 > 1 {
+pub async fn migrate_from_version(
+    pool: &Pool,
+    version: SchemaVersion,
+    config: &Configuration,
+) -> anyhow::Result<()> {
+    if version.0 < 2 {
+        info!("Upgrading DB schema from version 1->2");
+        sqlx::query(
+            &Table::alter()
+                .table(Users::Table)
+                .add_column(ColumnDef::new(Users::PasswordHashV2).binary())
+                .to_string(DbQueryBuilder {}),
+        )
+        .execute(pool)
+        .await?;
+        let backend_handler = SqlBackendHandler::new(config.clone(), pool.clone());
+        backend_handler
+            .set_password(super::handler::BindRequest {
+                name: config.ldap_user_dn.clone(),
+                password: config.ldap_user_pass.unsecure().to_owned(),
+            })
+            .await?;
+    }
+    sqlx::query(
+        &Query::update()
+            .table(Metadata::Table)
+            .values(vec![(Metadata::Version, SchemaVersion(2).into())])
+            .to_string(DbQueryBuilder {}),
+    )
+    .execute(pool)
+    .await?;
+    info!("Successfully upgraded DB to schema version 2");
+    if version.0 > 2 {
         anyhow::bail!("DB version downgrading is not supported");
     }
     Ok(())

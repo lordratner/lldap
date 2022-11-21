@@ -32,15 +32,15 @@ pub struct Props {
     pub on_logged_in: Callback<(String, bool)>,
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Msg {
     Update,
     Submit,
     AuthenticationRefreshResponse(Result<(String, bool)>),
     AuthenticationStartResponse(
-        (
-            opaque::client::login::ClientLogin,
-            Result<Box<login::ServerLoginStartResponse>>,
-        ),
+        opaque::client::login::ClientLogin,
+        String,
+        Result<Box<login::ServerLoginStartResponse>>,
     ),
     AuthenticationFinishResponse(Result<(String, bool)>),
 }
@@ -64,25 +64,27 @@ impl CommonComponent<LoginForm> for LoginForm {
                 };
                 self.common
                     .call_backend(HostService::login_start, req, move |r| {
-                        Msg::AuthenticationStartResponse((state, r))
+                        Msg::AuthenticationStartResponse(state, password, r)
                     })?;
                 Ok(true)
             }
-            Msg::AuthenticationStartResponse((login_start, res)) => {
+            Msg::AuthenticationStartResponse(login_start, password, res) => {
                 let res = res.context("Could not log in (invalid response to login start)")?;
-                let login_finish =
-                    match opaque::client::login::finish_login(login_start, res.credential_response)
-                    {
-                        Err(e) => {
-                            // Common error, we want to print a full error to the console but only a
-                            // simple one to the user.
-                            ConsoleService::error(&format!("Invalid username or password: {}", e));
-                            self.common.error = Some(anyhow!("Invalid username or password"));
-                            self.common.cancel_task();
-                            return Ok(true);
-                        }
-                        Ok(l) => l,
-                    };
+                let login_finish = match opaque::client::login::finish_login(
+                    &password,
+                    login_start,
+                    res.credential_response,
+                ) {
+                    Err(e) => {
+                        // Common error, we want to print a full error to the console but only a
+                        // simple one to the user.
+                        ConsoleService::error(&format!("Invalid username or password: {}", e));
+                        self.common.error = Some(anyhow!("Invalid username or password"));
+                        self.common.cancel_task();
+                        return Ok(true);
+                    }
+                    Ok(l) => l,
+                };
                 let req = login::ClientLoginFinishRequest {
                     server_data: res.server_data,
                     credential_finalization: login_finish.message,

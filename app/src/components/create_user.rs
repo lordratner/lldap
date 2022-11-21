@@ -65,10 +65,9 @@ pub enum Msg {
     CreateUserResponse(Result<create_user::ResponseData>),
     SuccessfulCreation,
     RegistrationStartResponse(
-        (
-            opaque::client::registration::ClientRegistration,
-            Result<Box<registration::ServerRegistrationStartResponse>>,
-        ),
+        String,
+        opaque::client::registration::ClientRegistration,
+        Result<Box<registration::ServerRegistrationStartResponse>>,
     ),
     RegistrationFinishResponse(Result<()>),
 }
@@ -124,7 +123,7 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                     };
                     self.common
                         .call_backend(HostService::register_start, req, move |r| {
-                            Msg::RegistrationStartResponse((state, r))
+                            Msg::RegistrationStartResponse(password, state, r)
                         })
                         .context("Error trying to create user")?;
                 } else {
@@ -132,10 +131,11 @@ impl CommonComponent<CreateUserForm> for CreateUserForm {
                 }
                 Ok(false)
             }
-            Msg::RegistrationStartResponse((registration_start, response)) => {
+            Msg::RegistrationStartResponse(password, registration_start, response) => {
                 let response = response?;
                 let mut rng = rand::rngs::OsRng;
                 let registration_upload = opaque::client::registration::finish_registration(
+                    &password,
                     registration_start,
                     response.registration_response,
                     &mut rng,

@@ -34,7 +34,7 @@ pub mod tests {
 
     pub async fn get_initialized_db() -> Pool {
         let sql_pool = get_in_memory_db().await;
-        init_table(&sql_pool).await.unwrap();
+        init_table(&sql_pool, &get_default_config()).await.unwrap();
         sql_pool
     }
 
@@ -52,6 +52,7 @@ pub mod tests {
             .await
             .unwrap();
         let registration_upload = opaque::client::registration::finish_registration(
+            pass,
             client_registration_start.state,
             response.registration_response,
             &mut rng,

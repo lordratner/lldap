@@ -11,7 +11,7 @@ opaque_client = []
 js = []
 
 [dependencies]
-rust-argon2 = "0.8"
+argon2 = "*"
 curve25519-dalek = "3"
 digest = "0.9"
 generic-array = "*"
@@ -21,7 +21,8 @@ sha2 = "0.9"
 thiserror = "*"
 
 [dependencies.opaque-ke]
-version = "0.6"
+version = "2"
+features = ["std"]
 
 [dependencies.chrono]
 version = "*"

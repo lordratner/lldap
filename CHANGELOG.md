@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+ - The password storage mechanism has changed, the passwords cannot be ported over from the old version. All passwords have to be reset.
+
 ## [0.4.1] - 2022-10-10
 
 ### Added

@@ -32,6 +32,7 @@ mockall::mock! {
     #[async_trait]
     impl LoginHandler for TestTcpBackendHandler {
         async fn bind(&self, request: BindRequest) -> Result<()>;
+        async fn set_password(&self, request: BindRequest) -> Result<()>;
     }
     #[async_trait]
     impl GroupBackendHandler for TestTcpBackendHandler {

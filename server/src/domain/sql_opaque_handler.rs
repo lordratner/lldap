@@ -36,6 +36,7 @@ fn passwords_match(
         username.as_str(),
     )?;
     client::login::finish_login(
+        clear_password,
         client_login_start_result.state,
         server_login_start_result.message,
     )?;
@@ -44,8 +45,13 @@ fn passwords_match(
 
 impl SqlBackendHandler {
     fn get_orion_secret_key(&self) -> Result<orion::aead::SecretKey> {
+        use opaque_ke::keypair::SecretKey;
         Ok(orion::aead::SecretKey::from_slice(
-            self.config.get_server_keys().private(),
+            self.config
+                .get_server_keys()
+                .private()
+                .serialize()
+                .as_slice(),
         )?)
     }
 
@@ -57,7 +63,7 @@ impl SqlBackendHandler {
         // Fetch the previously registered password file from the DB.
         let password_file_bytes = {
             let (query, values) = Query::select()
-                .column(Users::PasswordHash)
+                .column(Users::PasswordHashV2)
                 .from(Users::Table)
                 .cond_where(Expr::col(Users::UserId).eq(username))
                 .build_sqlx(DbQueryBuilder {});
@@ -66,7 +72,7 @@ impl SqlBackendHandler {
                 .await?
             {
                 if let Some(bytes) =
-                    row.get::<Option<Vec<u8>>, _>(&*Users::PasswordHash.to_string())
+                    row.get::<Option<Vec<u8>>, _>(&*Users::PasswordHashV2.to_string())
                 {
                     bytes
                 } else {
@@ -91,7 +97,7 @@ impl LoginHandler for SqlBackendHandler {
     #[instrument(skip_all, level = "debug", err)]
     async fn bind(&self, request: BindRequest) -> Result<()> {
         let (query, values) = Query::select()
-            .column(Users::PasswordHash)
+            .column(Users::PasswordHashV2)
             .from(Users::Table)
             .cond_where(Expr::col(Users::UserId).eq(&request.name))
             .build_sqlx(DbQueryBuilder {});
@@ -100,7 +106,7 @@ impl LoginHandler for SqlBackendHandler {
             .await
         {
             if let Some(password_hash) =
-                row.get::<Option<Vec<u8>>, _>(&*Users::PasswordHash.to_string())
+                row.get::<Option<Vec<u8>>, _>(&*Users::PasswordHashV2.to_string())
             {
                 if let Err(e) = passwords_match(
                     &password_hash,
@@ -122,6 +128,31 @@ impl LoginHandler for SqlBackendHandler {
             " for user '{}'",
             request.name
         )))
+    }
+
+    #[instrument(skip_all, level = "debug", err)]
+    async fn set_password(&self, request: BindRequest) -> Result<()> {
+        use lldap_auth::*;
+        let mut rng = rand::rngs::OsRng;
+        let registration_start_request =
+            opaque::client::registration::start_registration(&request.password, &mut rng)?;
+        let req = registration::ClientRegistrationStartRequest {
+            username: request.name.to_string(),
+            registration_start_request: registration_start_request.message,
+        };
+        let registration_start_response = self.registration_start(req).await?;
+        let registration_finish = opaque::client::registration::finish_registration(
+            &request.password,
+            registration_start_request.state,
+            registration_start_response.registration_response,
+            &mut rng,
+        )?;
+        let req = registration::ClientRegistrationFinishRequest {
+            server_data: registration_start_response.server_data,
+            registration_upload: registration_finish.message,
+        };
+        self.registration_finish(req).await?;
+        Ok(())
     }
 }
 
@@ -214,7 +245,10 @@ impl OpaqueHandler for SqlOpaqueHandler {
             // Set the user password to the new password.
             let (update_query, values) = Query::update()
                 .table(Users::Table)
-                .value(Users::PasswordHash, password_file.serialize().into())
+                .value(
+                    Users::PasswordHashV2,
+                    password_file.serialize().as_slice().into(),
+                )
                 .cond_where(Expr::col(Users::UserId).eq(username))
                 .build_sqlx(DbQueryBuilder {});
             sqlx::query_with(update_query.as_str(), values)
@@ -243,6 +277,7 @@ pub(crate) async fn register_password(
         })
         .await?;
     let registration_finish = opaque::client::registration::finish_registration(
+        password.unsecure(),
         registration_start.state,
         start_response.registration_response,
         &mut rng,
@@ -275,6 +310,7 @@ mod tests {
             })
             .await?;
         let login_finish = opaque::client::login::finish_login(
+            password,
             login_start.state,
             start_response.credential_response,
         )?;

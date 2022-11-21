@@ -1,3 +1,5 @@
+use crate::infra::configuration::Configuration;
+
 use super::{
     handler::{GroupId, UserId, Uuid},
     sql_migrations::{get_schema_version, migrate_from_version, upgrade_to_v1},
@@ -62,7 +64,9 @@ pub enum Users {
     LastName,
     Avatar,
     CreationDate,
+    // Deprecated
     PasswordHash,
+    PasswordHashV2,
     TotpSecret,
     MfaType,
     Uuid,
@@ -96,7 +100,7 @@ pub enum Metadata {
     Version,
 }
 
-pub async fn init_table(pool: &Pool) -> anyhow::Result<()> {
+pub async fn init_table(pool: &Pool, config: &Configuration) -> anyhow::Result<()> {
     let version = {
         if let Some(version) = get_schema_version(pool).await {
             version
@@ -105,20 +109,27 @@ pub async fn init_table(pool: &Pool) -> anyhow::Result<()> {
             SchemaVersion(1)
         }
     };
-    migrate_from_version(pool, version).await?;
+    migrate_from_version(pool, version, config).await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::infra::configuration::ConfigurationBuilder;
     use chrono::prelude::*;
     use sqlx::{Column, Row};
+
+    async fn init_tables_for_test(pool: &Pool) {
+        init_table(&pool, &ConfigurationBuilder::for_tests())
+            .await
+            .unwrap();
+    }
 
     #[tokio::test]
     async fn test_init_table() {
         let sql_pool = PoolOptions::new().connect("sqlite::memory:").await.unwrap();
-        init_table(&sql_pool).await.unwrap();
+        init_tables_for_test(&sql_pool).await;
         sqlx::query(r#"INSERT INTO users
       (user_id, email, display_name, first_name, last_name, creation_date, password_hash, uuid)
       VALUES ("bôb", "böb@bob.bob", "Bob Bobbersön", "Bob", "Bobberson", "1970-01-01 00:00:00", "bob00", "abc")"#).execute(&sql_pool).await.unwrap();
@@ -138,8 +149,8 @@ mod tests {
     #[tokio::test]
     async fn test_already_init_table() {
         let sql_pool = PoolOptions::new().connect("sqlite::memory:").await.unwrap();
-        init_table(&sql_pool).await.unwrap();
-        init_table(&sql_pool).await.unwrap();
+        init_tables_for_test(&sql_pool).await;
+        init_tables_for_test(&sql_pool).await;
     }
 
     #[tokio::test]
@@ -168,7 +179,7 @@ mod tests {
         .execute(&sql_pool)
         .await
         .unwrap();
-        init_table(&sql_pool).await.unwrap();
+        init_tables_for_test(&sql_pool).await;
         sqlx::query(
             r#"INSERT INTO groups (display_name, creation_date, uuid)
                       VALUES ("test", "1970-01-01 00:00:00", "abc")"#,
@@ -210,7 +221,7 @@ mod tests {
                 .fetch_one(&sql_pool)
                 .await
                 .unwrap(),
-            SchemaVersion(1)
+            SchemaVersion(2)
         );
     }
 
@@ -228,6 +239,8 @@ mod tests {
         .execute(&sql_pool)
         .await
         .unwrap();
-        assert!(init_table(&sql_pool).await.is_err());
+        assert!(init_table(&sql_pool, &ConfigurationBuilder::for_tests())
+            .await
+            .is_err());
     }
 }

@@ -261,6 +261,7 @@ pub struct UpdateGroupRequest {
 #[async_trait]
 pub trait LoginHandler: Clone + Send {
     async fn bind(&self, request: BindRequest) -> Result<()>;
+    async fn set_password(&self, request: BindRequest) -> Result<()>;
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
@@ -339,6 +340,7 @@ mockall::mock! {
     #[async_trait]
     impl LoginHandler for TestBackendHandler {
         async fn bind(&self, request: BindRequest) -> Result<()>;
+        async fn set_password(&self, request: BindRequest) -> Result<()>;
     }
 }
 
