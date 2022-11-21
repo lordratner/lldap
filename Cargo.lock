@@ -2188,7 +2188,7 @@ checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
 
 [[package]]
 name = "lldap"
-version = "0.4.2-alpha"
+version = "1.0.0-alpha"
 dependencies = [
  "actix",
  "actix-files",
@@ -2251,12 +2251,12 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uuid",
- "webpki-roots 0.22.4",
+ "webpki-roots 0.21.1",
 ]
 
 [[package]]
 name = "lldap_app"
-version = "0.4.2-alpha"
+version = "1.0.0-alpha"
 dependencies = [
  "anyhow",
  "base64",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "lldap_auth"
-version = "0.3.0-alpha.1"
+version = "1.0.0-alpha"
 dependencies = [
  "argon2",
  "chrono",

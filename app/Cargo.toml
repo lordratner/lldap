@@ -1,6 +1,6 @@
 [package]
 name = "lldap_app"
-version = "0.4.2-alpha"
+version = "1.0.0-alpha"
 authors = ["Valentin Tolmer <valentin@tolmer.fr>"]
 edition = "2021"
 
