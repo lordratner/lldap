@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - 'main'
+      - 'v1'
   release:
     types:
       - 'published'
@@ -347,6 +348,11 @@ jobs:
 ######################
 #### latest build ####
 ######################
+      - name: Sets env vars for docker images
+        run: |
+          echo "DOCKER_IMAGE_SUFFIX=-v1" >> $GITHUB_ENV
+        if: github.ref == 'refs/heads/v1'
+
       - name: Build and push latest alpine
         if: github.event_name != 'release'
         uses: docker/build-push-action@v3
@@ -355,7 +361,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/amd64,linux/arm64
           file: ./.github/workflows/Dockerfile.ci.alpine
-          tags: nitnelave/lldap:latest, nitnelave/lldap:latest-alpine
+          tags: nitnelave/lldap:latest${{env.DOCKER_IMAGE_SUFFIX}}, nitnelave/lldap:latest-alpine${{env.DOCKER_IMAGE_SUFFIX}}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
@@ -367,7 +373,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           file: ./.github/workflows/Dockerfile.ci.debian
-          tags: nitnelave/lldap:latest-debian
+          tags: nitnelave/lldap:latest-debian${{env.DOCKER_IMAGE_SUFFIX}}
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new
 
@@ -375,7 +381,7 @@ jobs:
 #### release build ####
 #######################
       - name: Build and push release alpine
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' && github.ref != 'refs/heads/v1'
         uses: docker/build-push-action@v3
         with:
           context: .
